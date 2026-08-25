@@ -1,0 +1,9 @@
+# drun (do-run) CLI is a fast, semantic task runner with 
+# its own powerful automation language. Effortless tasks, serious speed.
+# Learn more at https://github.com/phillarmonic/drun
+
+version: 2.0
+
+project "deepseek-harness-kimi-connector-plugin" version "1.0":
+task "default" means "Welcome":
+	info "Welcome to drun v2! 🚀"
