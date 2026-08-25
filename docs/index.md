@@ -1,173 +1,58 @@
 ---
-icon: lucide/rocket
+title: Kimi connector for DeepSeek Harness
+description: >-
+  @phillarmonic/dsh-llm-kimi is a Kimi K3 (Moonshot) connector plugin for the
+  DeepSeek Harness llm capability seam. Stream Kimi Code chat completions with
+  reasoning effort and image input, configured entirely from cordis.yml.
+icon: lucide/bot
 ---
 
-# Get started
+# Kimi connector for DeepSeek Harness
 
-For full documentation visit [zensical.org](https://zensical.org/docs/).
+`@phillarmonic/dsh-llm-kimi` is a [Kimi K3](https://www.kimi.com/) (Moonshot AI) connector plugin for the [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh-llm) `llm` capability seam.
 
-## Commands
+It registers a direct-fetch `LlmAdapter` for the `kimi-code` provider route and streams Kimi Code chat completions, an OpenAI-compatible dialect, as harness `StreamChunk`s. Connection facts resolve per request, so a changed base URL, model catalog, or API key reaches the next request without a restart.
 
-* [`zensical new`][new] - Create a new project
-* [`zensical serve`][serve] - Start local web server
-* [`zensical build`][build] - Build your site
+## Why this plugin
 
-  [new]: https://zensical.org/docs/usage/new/
-  [serve]: https://zensical.org/docs/usage/preview/
-  [build]: https://zensical.org/docs/usage/build/
+- **Native Kimi Code endpoint.** Talks to `https://api.kimi.com/coding/v1/chat/completions` with bearer auth and genuine attribution headers.
+- **Streaming with reasoning.** Streams text and reasoning deltas, replays `reasoning_content` on tool-call turns so multi-turn tool sessions stay valid.
+- **Image input.** All four Kimi Code models accept images; the plugin reads them through the harness attachment service and inlines them as base64 `image_url` data URLs.
+- **Safe defaults.** Fixed sampling by default (no `temperature`, `top_p`, or `n`), sensible token and context defaults, and an idle-timeout watchdog on every stream.
+- **Configured from `cordis.yml`.** Every deployment-varying choice is a validated config field that reloads live.
 
-## Examples
+## Quick start
 
-### Admonitions
-
-> Go to [documentation](https://zensical.org/docs/authoring/admonitions/)
-
-!!! note
-
-    This is a **note** admonition. Use it to provide helpful information.
-
-!!! warning
-
-    This is a **warning** admonition. Be careful!
-
-### Details
-
-> Go to [documentation](https://zensical.org/docs/authoring/admonitions/#collapsible-blocks)
-
-??? info "Click to expand for more info"
-
-    This content is hidden until you click to expand it.
-    Great for FAQs or long explanations.
-
-## Code Blocks
-
-> Go to [documentation](https://zensical.org/docs/authoring/code-blocks/)
-
-``` python hl_lines="2" title="Code blocks"
-def greet(name):
-    print(f"Hello, {name}!") # (1)!
-
-greet("Python")
+```sh
+pnpm add @phillarmonic/dsh-llm-kimi
 ```
 
-1.  > Go to [documentation](https://zensical.org/docs/authoring/code-blocks/#code-annotations)
+Add the plugin to your `cordis.yml` and export your Kimi Code key:
 
-    Code annotations allow to attach notes to lines of code.
-
-Code can also be highlighted inline: `#!python print("Hello, Python!")`.
-
-## Content tabs
-
-> Go to [documentation](https://zensical.org/docs/authoring/content-tabs/)
-
-=== "Python"
-
-    ``` python
-    print("Hello from Python!")
-    ```
-
-=== "Rust"
-
-    ``` rs
-    println!("Hello from Rust!");
-    ```
-
-## Diagrams
-
-> Go to [documentation](https://zensical.org/docs/authoring/diagrams/)
-
-``` mermaid
-graph LR
-  A[Start] --> B{Error?};
-  B -->|Yes| C[Hmm...];
-  C --> D[Debug];
-  D --> B;
-  B ---->|No| E[Yay!];
+```yaml
+plugins:
+  llm: {}
+  '@phillarmonic/dsh-llm-kimi':
+    reasoningEffort: low
 ```
 
-## Footnotes
+```sh
+export KIMI_CODE_API_KEY=sk-...
+```
 
-> Go to [documentation](https://zensical.org/docs/authoring/footnotes/)
+Then select provider `kimi-code` and a model such as `k3` when you run a task.
 
-Here's a sentence with a footnote.[^1]
+Continue with [Installation](installation.md), [Configuration](configuration.md), and [Image input](image-input.md).
 
-Hover it, to see a tooltip.
+## At a glance
 
-[^1]: This is the footnote.
-
-
-## Formatting
-
-> Go to [documentation](https://zensical.org/docs/authoring/formatting/)
-
-- ==This was marked (highlight)==
-- ^^This was inserted (underline)^^
-- ~~This was deleted (strikethrough)~~
-- H~2~O
-- A^T^A
-- ++ctrl+alt+del++
-
-## Icons, Emojis
-
-> Go to [documentation](https://zensical.org/docs/authoring/icons-emojis/)
-
-* :sparkles: `:sparkles:`
-* :rocket: `:rocket:`
-* :tada: `:tada:`
-* :memo: `:memo:`
-* :eyes: `:eyes:`
-
-## Maths
-
-> Go to [documentation](https://zensical.org/docs/authoring/math/)
-
-$$
-\cos x=\sum_{k=0}^{\infty}\frac{(-1)^k}{(2k)!}x^{2k}
-$$
-
-!!! warning "Needs configuration"
-    Note that MathJax is included via a `script` tag on this page and is not
-    configured in the generated default configuration to avoid including it
-    in a pages that do not need it. See the documentation for details on how
-    to configure it on all your pages if they are more Maths-heavy than these
-    simple starter pages.
-
-<script id="MathJax-script" src="https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js"></script>
-<script>
-  window.MathJax = {
-    tex: {
-      inlineMath: [["\\(", "\\)"]],
-      displayMath: [["\\[", "\\]"]],
-      processEscapes: true,
-      processEnvironments: true
-    },
-    options: {
-      ignoreHtmlClass: ".*|",
-      processHtmlClass: "arithmatex"
-    }
-  };
-
-  document$.subscribe(() => {
-    MathJax.startup.output.clearCache()
-    MathJax.typesetClear()
-    MathJax.texReset()
-    MathJax.typesetPromise()
-  })
-</script>
-
-## Task Lists
-
-> Go to [documentation](https://zensical.org/docs/authoring/lists/#using-task-lists)
-
-* [x] Install Zensical
-* [x] Configure `zensical.toml`
-* [x] Write amazing documentation
-* [ ] Deploy anywhere
-
-## Tooltips
-
-> Go to [documentation](https://zensical.org/docs/authoring/tooltips/)
-
-[Hover me][example]
-
-  [example]: https://example.com "I'm a tooltip!"
+| | |
+| --- | --- |
+| Package | [`@phillarmonic/dsh-llm-kimi`](https://www.npmjs.com/package/@phillarmonic/dsh-llm-kimi) |
+| Provider route | `kimi-code` |
+| Endpoint | `https://api.kimi.com/coding/v1` |
+| Models | `k3`, `k3-256k`, `kimi-for-coding`, `kimi-for-coding-highspeed` |
+| Image input | Yes, all four models |
+| Runtime | Node `^22.19 || >=24`, ESM |
+| License | MIT |
+| Source | [github.com/phillarmonic/dsh-llm-kimi](https://github.com/phillarmonic/dsh-llm-kimi) |
