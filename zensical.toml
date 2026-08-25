@@ -24,6 +24,7 @@ nav = [
   { "Models" = "models.md" },
   { "Image input" = "image-input.md" },
   { "Behavior and limits" = "behavior.md" },
+  { "Local testing" = "local-testing.md" },
   { "Development" = "development.md" },
 ]
 
