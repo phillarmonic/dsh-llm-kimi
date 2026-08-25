@@ -1,0 +1,36 @@
+# drun (do-run) CLI is a fast, semantic task runner with 
+# its own powerful automation language. Effortless tasks, serious speed.
+# Learn more at https://github.com/phillarmonic/drun
+
+version: 2.0
+
+project "dsh-llm-kimi" version "1.0":
+	requires tools:
+		node
+		pnpm
+
+task "default" means "Show available automation":
+	info "Kimi connector plugin tasks. Run xdrun --list to see them all."
+
+task "install" means "Install dependencies":
+	run "pnpm install"
+
+task "typecheck" means "Type-check the sources without emitting":
+	run "pnpm run typecheck"
+
+task "test" means "Run the unit test suite":
+	run "pnpm run test"
+
+task "watch" means "Run the tests in watch mode":
+	run "pnpm run test:watch" attached
+
+task "build" means "Bundle the plugin into lib/":
+	run "pnpm run build"
+
+task "clean" means "Remove build output":
+	run "rm -rf lib"
+
+task "check" mode "ci" means "Type-check, test, and build":
+	call task "typecheck"
+	call task "test"
+	call task "build"
