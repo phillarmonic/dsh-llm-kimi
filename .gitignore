@@ -204,3 +204,6 @@ dist
 .yarn/install-state.gz
 .pnp.*
 
+.cache
+site
+.venv
