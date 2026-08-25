@@ -13,23 +13,30 @@ Try the connector against a real DeepSeek Harness before publishing to npm. Pick
 
 ## Testing inside the harness monorepo
 
-When the target is the `deepseek-harness` monorepo itself, use a global link so the plugin resolves the workspace's own `@deepseek-ai/dsh-*` packages instead of the pinned published versions. This sidesteps peer-version skew.
+When the target is the `deepseek-harness` monorepo itself, use a link so the plugin resolves the workspace's own `@deepseek-ai/dsh-*` packages instead of the pinned published versions. This sidesteps peer-version skew.
 
-Build and link the plugin:
+Build the plugin so `lib/` exists:
 
 ```sh
+# in the plugin repo
 pnpm run build
-pnpm link --global
 ```
 
-Link it into the harness:
+Link the plugin directory into the harness:
 
 ```sh
 # in the harness monorepo root
-pnpm link --global @phillarmonic/dsh-llm-kimi
+pnpm link /absolute/path/to/deepseek-harness-kimi-connector-plugin
 ```
 
-With a link, pnpm does not install the plugin's peer dependencies. They resolve at runtime from the harness workspace packages, so the plugin runs against the same `ctx.llm` and `ctx.attachments` the harness provides.
+This creates a symlink at `node_modules/@phillarmonic/dsh-llm-kimi` in the harness pointing at your working tree. pnpm does not install the plugin's peer dependencies through a link. They resolve at runtime from the harness workspace packages, so the plugin runs against the same `ctx.llm` and `ctx.attachments` the harness provides.
+
+!!! tip "Global link alternative"
+
+    A two-step global link also works: `pnpm link --global .` in the plugin repo,
+    then `pnpm link --global @phillarmonic/dsh-llm-kimi` in the harness. The
+    single-step directory form above avoids pnpm version quirks around the
+    global self-link.
 
 !!! note "Unmet-peer warnings are expected"
 
@@ -42,9 +49,7 @@ Unlink when finished:
 
 ```sh
 # in the harness
-pnpm unlink --global @phillarmonic/dsh-llm-kimi
-# in the plugin repo
-pnpm unlink --global
+pnpm unlink @phillarmonic/dsh-llm-kimi
 ```
 
 ## Testing in a consuming project
