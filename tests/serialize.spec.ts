@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { LlmError, CallId, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import { serializeRequest } from '../src/serialize.ts'
-import type { RequestDefaults } from '../src/serialize.ts'
+import type { PreparedImages, RequestDefaults } from '../src/serialize.ts'
+
+/** Minimal image block referencing an attachment id; serialization only reads `attachment.attachmentId`. */
+function imageBlock(id: string): ContentBlock {
+  return { type: 'image', attachment: { attachmentId: AttachmentId(id) } } as unknown as ContentBlock
+}
 
 /** Minimal message factory: serialization only reads `role` and `content`. */
 function message(role: Message['role'], content: ContentBlock[]): Message {
@@ -89,8 +95,44 @@ describe('serializeRequest', () => {
     expect(body.messages).toEqual([{ role: 'tool', tool_call_id: 'call_9', content: 'done' }])
   })
 
-  it('rejects image content instead of dropping it', () => {
-    const withImage = message('user', [{ type: 'image' } as unknown as ContentBlock])
-    expect(() => serializeRequest(options([withImage]))).toThrow(/does not support image content/)
+  it('rejects image content whose data URL was not prepared', () => {
+    const withImage = message('user', [imageBlock('sha256:missing')])
+    expect(() => serializeRequest(options([withImage]))).toThrow(/was not prepared/)
+  })
+
+  it('emits a prepared image as an inline image_url part beside text', () => {
+    const images: PreparedImages = new Map([[AttachmentId('sha256:a'), 'data:image/png;base64,AAAA']])
+    const withImage = message('user', [
+      { type: 'text', text: 'look' },
+      imageBlock('sha256:a'),
+    ])
+    const body = serializeRequest(options([withImage]), {}, images)
+    expect(body.messages).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'look' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+      ],
+    }])
+  })
+
+  it('carries a prepared image out of a tool result as parts', () => {
+    const images: PreparedImages = new Map([[AttachmentId('sha256:b'), 'data:image/jpeg;base64,BBBB']])
+    const toolResult = message('user', [
+      {
+        type: 'tool-result',
+        toolCallId: CallId('call_5'),
+        content: [{ type: 'text', text: 'shot' }, imageBlock('sha256:b')],
+      },
+    ])
+    const body = serializeRequest(options([toolResult]), {}, images)
+    expect(body.messages).toEqual([{
+      role: 'tool',
+      tool_call_id: 'call_5',
+      content: [
+        { type: 'text', text: 'shot' },
+        { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,BBBB' } },
+      ],
+    }])
   })
 })

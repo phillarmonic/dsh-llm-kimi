@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CallId, LlmError } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { KimiAdapter } from '../src/adapter.ts'
 import { resolveAdapterOptions } from '../src/index.ts'
 import type { Config } from '../src/index.ts'
@@ -12,12 +14,39 @@ afterEach(async () => {
 })
 
 /** Direct adapter over the plugin's real resolve step, with a static key. */
-function adapterOf(baseURL: string, config: Partial<Config> & { apiKey?: string } = {}): KimiAdapter {
-  const { apiKey, ...rest } = config
+function adapterOf(
+  baseURL: string,
+  config: Partial<Config> & { apiKey?: string, attachments?: AttachmentStore } = {},
+): KimiAdapter {
+  const { apiKey, attachments, ...rest } = config
   return new KimiAdapter({
     options: () => resolveAdapterOptions({ ...rest, baseURL }),
     resolveApiKey: () => Promise.resolve(apiKey ?? 'test-key'),
+    ...attachments === undefined ? {} : { resolveAttachments: () => attachments },
   })
+}
+
+/** Durable image reference; the adapter reads only id, media type, byte count, and dimensions. */
+function imageRef(id: string, extra: Partial<ImageAttachmentRef> = {}): ImageAttachmentRef {
+  return {
+    attachmentId: AttachmentId(id),
+    mediaType: 'image/png',
+    bytes: 100,
+    width: 10,
+    height: 10,
+    ...extra,
+  }
+}
+
+function imageMessage(ref: ImageAttachmentRef): Message {
+  return message('user', [{ type: 'image', attachment: ref } as unknown as ContentBlock])
+}
+
+/** Attachment store whose only exercised method returns the given bytes for any reference. */
+function fakeAttachments(bytes: Uint8Array = new Uint8Array([1, 2, 3])): AttachmentStore {
+  return {
+    readImage: (ref: ImageAttachmentRef) => Promise.resolve({ ref, data: bytes }),
+  } as unknown as AttachmentStore
 }
 
 function message(role: Message['role'], content: ContentBlock[]): Message {
@@ -131,5 +160,54 @@ describe('KimiAdapter', () => {
     const server = await mockServer([{ kind: 'sse', events: textEvents, delayMs: 200 }])
     const adapter = adapterOf(server.url, { streamIdleTimeoutMs: 40 })
     await expect(collect(adapter.stream(request(userHi)))).rejects.toMatchObject({ code: 'TIMEOUT' })
+  })
+
+  it('advertises image input for the default models', async () => {
+    const server = await mockServer([])
+    const adapter = adapterOf(server.url)
+    const k3 = await adapter.resolveModel('kimi-code', 'k3')
+    expect(k3.inputModalities).toContain('image')
+  })
+
+  it('reads a request image and sends it as an inline image_url part', async () => {
+    const server = await mockServer([{ kind: 'sse', events: textEvents }])
+    const bytes = new Uint8Array([0xDE, 0xAD, 0xBE, 0xEF])
+    const adapter = adapterOf(server.url, { attachments: fakeAttachments(bytes) })
+    await collect(adapter.stream(request([imageMessage(imageRef('sha256:a'))])))
+    const body = server.requests[0] as { messages: Array<{ content: unknown }> }
+    expect(body.messages[0]?.content).toEqual([
+      { type: 'image_url', image_url: { url: `data:image/png;base64,${Buffer.from(bytes).toString('base64')}` } },
+    ])
+  })
+
+  it('rejects image input for a model without image support', async () => {
+    const server = await mockServer([])
+    const adapter = adapterOf(server.url, {
+      models: [{ id: 'k3', supportsImage: false }],
+      attachments: fakeAttachments(),
+    })
+    await expect(collect(adapter.stream(request([imageMessage(imageRef('sha256:a'))]))))
+      .rejects.toMatchObject({ constructor: LlmError, code: 'UNSUPPORTED_CONTENT' })
+  })
+
+  it('rejects image input without a mounted attachment service', async () => {
+    const server = await mockServer([])
+    const adapter = adapterOf(server.url)
+    await expect(collect(adapter.stream(request([imageMessage(imageRef('sha256:a'))]))))
+      .rejects.toMatchObject({ constructor: LlmError, code: 'INVALID_REQUEST' })
+  })
+
+  it('rejects a request image over the byte budget', async () => {
+    const server = await mockServer([])
+    const adapter = adapterOf(server.url, { imageMaxBytes: 50, attachments: fakeAttachments() })
+    await expect(collect(adapter.stream(request([imageMessage(imageRef('sha256:a', { bytes: 1000 }))]))))
+      .rejects.toMatchObject({ constructor: LlmError, code: 'INVALID_REQUEST' })
+  })
+
+  it('rejects a request image over the pixel budget', async () => {
+    const server = await mockServer([])
+    const adapter = adapterOf(server.url, { imagePixelBudget: 100, attachments: fakeAttachments() })
+    await expect(collect(adapter.stream(request([imageMessage(imageRef('sha256:a', { width: 50, height: 50 }))]))))
+      .rejects.toMatchObject({ constructor: LlmError, code: 'INVALID_REQUEST' })
   })
 })

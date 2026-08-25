@@ -34,6 +34,20 @@ describe('resolveAdapterOptions defaults', () => {
     expect(reasoningIds).toEqual(['k3', 'k3-256k'])
   })
 
+  it('marks every default model as accepting image input', () => {
+    expect(resolved.models.every(model => model.supportsImage)).toBe(true)
+  })
+
+  it('budgets request images at 4K resolution and 1 MiB by default', () => {
+    expect(resolved.imagePixelBudget).toBe(3840 * 2160)
+    expect(resolved.imageMaxBytes).toBe(1024 * 1024)
+  })
+
+  it('rejects a non-positive image budget', () => {
+    expect(() => resolveAdapterOptions({ imagePixelBudget: 0 })).toThrow(/imagePixelBudget/)
+    expect(() => resolveAdapterOptions({ imageMaxBytes: -1 })).toThrow(/imageMaxBytes/)
+  })
+
   it('rejects an out-of-range idle timeout', () => {
     expect(() => resolveAdapterOptions({ streamIdleTimeoutMs: -1 })).toThrow(/streamIdleTimeoutMs/)
   })

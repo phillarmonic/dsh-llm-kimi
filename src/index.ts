@@ -22,6 +22,8 @@ import { MAX_TIMER_DELAY_MS } from '@deepseek-ai/dsh-timeout'
 import {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
+  DEFAULT_REQUEST_IMAGE_MAX_BYTES,
+  DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET,
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   KimiAdapter,
 } from './adapter.ts'
@@ -30,6 +32,8 @@ import type { KimiCatalogModel, KimiConnectionOptions } from './adapter.ts'
 export {
   DEFAULT_CONTEXT_WINDOW,
   DEFAULT_MAX_TOKENS,
+  DEFAULT_REQUEST_IMAGE_MAX_BYTES,
+  DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET,
   DEFAULT_STREAM_IDLE_TIMEOUT_MS,
   KimiAdapter,
   httpErrorCode,
@@ -53,14 +57,21 @@ const PROVIDER = 'kimi-code'
 const CONTEXT_256K = 262_144
 
 const DEFAULT_MODELS: KimiCatalogModel[] = [
-  { id: 'k3', name: 'Kimi K3', contextWindow: DEFAULT_CONTEXT_WINDOW, supportsReasoning: true },
-  { id: 'k3-256k', name: 'Kimi K3 (256K)', contextWindow: CONTEXT_256K, supportsReasoning: true },
-  { id: 'kimi-for-coding', name: 'Kimi for Coding', contextWindow: CONTEXT_256K, supportsReasoning: false },
+  { id: 'k3', name: 'Kimi K3', contextWindow: DEFAULT_CONTEXT_WINDOW, supportsReasoning: true, supportsImage: true },
+  { id: 'k3-256k', name: 'Kimi K3 (256K)', contextWindow: CONTEXT_256K, supportsReasoning: true, supportsImage: true },
+  {
+    id: 'kimi-for-coding',
+    name: 'Kimi for Coding',
+    contextWindow: CONTEXT_256K,
+    supportsReasoning: false,
+    supportsImage: true,
+  },
   {
     id: 'kimi-for-coding-highspeed',
     name: 'Kimi for Coding (High Speed)',
     contextWindow: CONTEXT_256K,
     supportsReasoning: false,
+    supportsImage: true,
   },
 ]
 
@@ -84,6 +95,10 @@ export interface Config {
   maxTokens?: number
   /** Positive context capacity used when the selected model has no exact value (default 1,048,576). */
   defaultContextWindow?: number
+  /** Reject a request image whose intrinsic pixel count exceeds this budget (default 8,294,400 = 4K). */
+  imagePixelBudget?: number
+  /** Reject a request image whose encoded byte length exceeds this budget (default 1 MiB). */
+  imageMaxBytes?: number
   /** Advisory models shown by discovery consumers; defaults to the four Kimi Code models. */
   models?: KimiCatalogModel[]
   /** Maximum provider idle time while one stream read is outstanding (default five minutes). */
@@ -99,6 +114,7 @@ const catalogModel: z<KimiCatalogModel> = z.object({
   contextWindow: z.number().step(1).min(1),
   maxTokens: z.number().step(1).min(1),
   supportsReasoning: z.boolean().default(false),
+  supportsImage: z.boolean().default(false),
 })
 
 export const Config: z<Config> = z.object({
@@ -108,6 +124,8 @@ export const Config: z<Config> = z.object({
   sendTemperature: z.boolean().default(false),
   maxTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_MAX_TOKENS),
   defaultContextWindow: z.number().step(1).min(1).default(DEFAULT_CONTEXT_WINDOW),
+  imagePixelBudget: z.number().step(1).min(1).default(DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET),
+  imageMaxBytes: z.number().step(1).min(1).default(DEFAULT_REQUEST_IMAGE_MAX_BYTES),
   models: z.array(catalogModel).default(DEFAULT_MODELS),
   streamIdleTimeoutMs: z.number().min(Number.MIN_VALUE).max(MAX_TIMER_DELAY_MS).default(DEFAULT_STREAM_IDLE_TIMEOUT_MS),
   retryPolicy: RetryPolicySchema,
@@ -152,6 +170,7 @@ function resolveModels(models: readonly KimiCatalogModel[] | undefined): KimiCat
       ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
       ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
       supportsReasoning: model.supportsReasoning ?? false,
+      supportsImage: model.supportsImage ?? false,
     }
   })
 }
@@ -177,6 +196,14 @@ export function resolveAdapterOptions(
     && (!Number.isSafeInteger(config.maxTokens) || config.maxTokens <= 0)) {
     throw new Error('llm-kimi: maxTokens must be a positive safe integer')
   }
+  if (config.imagePixelBudget !== undefined
+    && (!Number.isInteger(config.imagePixelBudget) || config.imagePixelBudget <= 0)) {
+    throw new Error('llm-kimi: imagePixelBudget must be a positive integer')
+  }
+  if (config.imageMaxBytes !== undefined
+    && (!Number.isInteger(config.imageMaxBytes) || config.imageMaxBytes <= 0)) {
+    throw new Error('llm-kimi: imageMaxBytes must be a positive integer')
+  }
   const streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? DEFAULT_STREAM_IDLE_TIMEOUT_MS
   if (!Number.isFinite(streamIdleTimeoutMs)
     || streamIdleTimeoutMs <= 0
@@ -194,6 +221,8 @@ export function resolveAdapterOptions(
     sendTemperature: config.sendTemperature ?? false,
     maxTokens: config.maxTokens ?? DEFAULT_MAX_TOKENS,
     defaultContextWindow: config.defaultContextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    imagePixelBudget: config.imagePixelBudget ?? DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET,
+    imageMaxBytes: config.imageMaxBytes ?? DEFAULT_REQUEST_IMAGE_MAX_BYTES,
     models: resolveModels(config.models),
     streamIdleTimeoutMs,
     retryPolicy: resolveRetryPolicy(config.retryPolicy, 'llm-kimi: retryPolicy'),
@@ -248,7 +277,7 @@ export function apply(ctx: Context, config: Config): void {
     )
   }
 
-  const adapter = new KimiAdapter({ options, resolveApiKey })
+  const adapter = new KimiAdapter({ options, resolveApiKey, resolveAttachments: () => ctx.get('attachments') })
   ctx.llm.registerConfigurableProviders([
     { provider: PROVIDER, displayName: 'Kimi Code', settingsNs: NS, settingsPath: [] },
   ])

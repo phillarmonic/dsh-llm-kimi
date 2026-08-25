@@ -4,8 +4,9 @@
  * Source of truth: the official Kimi Code docs (www.kimi.com/code/docs/en),
  * covering `/coding/v1/chat/completions`, streaming, reasoning effort, and the
  * tool-call format. Kimi speaks the OpenAI chat-completions dialect, so the
- * wire shapes mirror it. This adapter is text-only: user messages carry a
- * single string, and no multimodal parts appear here.
+ * wire shapes mirror it. User and tool messages carry either a plain string or
+ * an ordered array of text and inline `image_url` parts when the request
+ * includes image content.
  *
  * @module @phillarmonic/dsh-llm-kimi/types
  */
@@ -43,17 +44,32 @@ export interface WireSystemMessage {
   content: string
 }
 
-/** User-role message: a single string of input (text-only adapter). */
-export interface WireUserMessage {
-  role: 'user'
-  content: string
+/** A plain-text segment of a multimodal message. */
+export interface WireTextContentPart {
+  type: 'text'
+  text: string
 }
 
-/** Tool-role message: the result of one tool call, keyed by its call id. */
+/** An inline base64 data-URL image segment of a multimodal message. */
+export interface WireImageContentPart {
+  type: 'image_url'
+  image_url: { url: string }
+}
+
+/** One ordered segment of a multimodal user or tool message. */
+export type WireContentPart = WireTextContentPart | WireImageContentPart
+
+/** User-role message: a single string, or ordered text and inline image parts. */
+export interface WireUserMessage {
+  role: 'user'
+  content: string | WireContentPart[]
+}
+
+/** Tool-role message: the result of one tool call, keyed by its call id; a string, or ordered parts when it carries images. */
 export interface WireToolMessage {
   role: 'tool'
   tool_call_id: string
-  content: string
+  content: string | WireContentPart[]
 }
 
 /**

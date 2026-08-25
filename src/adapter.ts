@@ -20,6 +20,7 @@ import {
   ReasoningEffortId,
 } from '@deepseek-ai/dsh-llm'
 import type {
+  ContentBlock,
   GenerateOptions,
   LlmModelInfo,
   LlmProviderInfo,
@@ -28,9 +29,10 @@ import type {
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import type { CredentialRef } from '@deepseek-ai/dsh-credentials'
+import type { AttachmentId, AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { serializeRequest } from './serialize.ts'
-import type { RequestDefaults } from './serialize.ts'
+import type { PreparedImages, RequestDefaults } from './serialize.ts'
 import { parseSse } from './sse.ts'
 import { translate } from './translate.ts'
 import type { WireError, WireRequest } from './types.ts'
@@ -53,6 +55,12 @@ export interface KimiCatalogModel {
    * adapter never sends the field to them.
    */
   supportsReasoning?: boolean
+  /**
+   * Whether this model accepts image input. All four Kimi Code models do; an
+   * uncatalogued endpoint is treated as text-only, and a request that carries
+   * image content for a non-image model is rejected rather than stripped.
+   */
+  supportsImage?: boolean
 }
 
 /**
@@ -78,6 +86,10 @@ export interface KimiConnectionOptions {
   maxTokens: number
   /** Positive context capacity used when the selected model has no exact value. */
   defaultContextWindow: number
+  /** Reject a request image whose intrinsic pixel count exceeds this budget. */
+  imagePixelBudget: number
+  /** Reject a request image whose encoded byte length exceeds this budget; keeps inline base64 within Kimi's per-message size limit. */
+  imageMaxBytes: number
   /** Advisory models exposed to discovery consumers; requests remain unrestricted. */
   models: readonly KimiCatalogModel[]
   /** Maximum provider idle time while one stream read is outstanding. */
@@ -97,6 +109,11 @@ export interface KimiAdapterOptions {
    * `MISSING_CREDENTIAL` when no key is available anywhere.
    */
   resolveApiKey: (connection: KimiConnectionOptions) => Promise<string>
+  /**
+   * Resolve the durable attachment service used to read and encode request
+   * images. Its absence rejects image input; text-only requests never call it.
+   */
+  resolveAttachments?: () => AttachmentStore | undefined
 }
 
 /** Default maximum idle interval while an adapter stream read is outstanding. */
@@ -105,6 +122,10 @@ export const DEFAULT_STREAM_IDLE_TIMEOUT_MS = 300_000
 export const DEFAULT_CONTEXT_WINDOW = 1_048_576
 /** Default per-request output-token cap; stays below the 262144 request-token limit. */
 export const DEFAULT_MAX_TOKENS = 131_072
+/** Default request-image pixel budget: Kimi accepts images up to 4K resolution (3840x2160). */
+export const DEFAULT_REQUEST_IMAGE_PIXEL_BUDGET = 3840 * 2160
+/** Default request-image byte budget; 1 MiB of raw bytes stays under Kimi's 2 MiB per-message limit once base64-expanded. */
+export const DEFAULT_REQUEST_IMAGE_MAX_BYTES = 1024 * 1024
 const STREAM_IDLE_TIMEOUT_CODE = 'LLM_STREAM_IDLE_TIMEOUT'
 const LOW_REASONING_EFFORT = ReasoningEffortId('low')
 const HIGH_REASONING_EFFORT = ReasoningEffortId('high')
@@ -121,7 +142,18 @@ function modelInfo(provider: string, model: KimiCatalogModel): LlmModelInfo {
     id: model.id,
     name: model.name ?? model.id,
     ...model.description === undefined ? {} : { description: model.description },
-    inputModalities: ['text'],
+    inputModalities: model.supportsImage === true ? ['text', 'image'] : ['text'],
+  }
+}
+
+/** Collect every image reference in a block list, walking nested tool results. */
+function collectImageRefs(
+  blocks: readonly ContentBlock[],
+  refs: Map<AttachmentId, ImageAttachmentRef>,
+): void {
+  for (const block of blocks) {
+    if (block.type === 'image') refs.set(block.attachment.attachmentId, block.attachment)
+    else if (block.type === 'tool-result') collectImageRefs(block.content, refs)
   }
 }
 
@@ -290,6 +322,56 @@ export class KimiAdapter extends LlmAdapter {
     }
   }
 
+  /**
+   * Resolve every image reference in the request to an inline base64 data URL.
+   * Image-free requests never touch the attachment service; a request that
+   * carries images for a non-image model, or without a mounted attachment
+   * service, is rejected before any bytes are read. Each image is budgeted
+   * against the connection's pixel and byte limits from the durable reference
+   * metadata before its bytes are read, so an oversize image fails loud rather
+   * than pushing the request past Kimi's per-message size limit.
+   */
+  private async prepareImages(
+    options: GenerateOptions,
+    connection: KimiConnectionOptions,
+    model: KimiCatalogModel | undefined,
+  ): Promise<PreparedImages> {
+    const refs = new Map<AttachmentId, ImageAttachmentRef>()
+    for (const message of options.messages) collectImageRefs(message.content, refs)
+    if (refs.size === 0) return new Map()
+    if (model?.supportsImage !== true) {
+      throw new LlmError(
+        `Kimi model "${options.model}" does not accept image content`,
+        'UNSUPPORTED_CONTENT',
+      )
+    }
+    const attachments = this.config.resolveAttachments?.()
+    if (attachments === undefined) {
+      throw new LlmError('Kimi image input requires the durable attachment service.', 'INVALID_REQUEST')
+    }
+    const prepared = new Map<AttachmentId, string>()
+    for (const [id, ref] of refs) {
+      const pixels = ref.width * ref.height
+      if (pixels > connection.imagePixelBudget) {
+        throw new LlmError(
+          `Kimi request image ${id} is ${ref.width}x${ref.height} (${pixels} px), over the`
+          + ` ${connection.imagePixelBudget} px budget`,
+          'INVALID_REQUEST',
+        )
+      }
+      if (ref.bytes > connection.imageMaxBytes) {
+        throw new LlmError(
+          `Kimi request image ${id} is ${ref.bytes} bytes, over the ${connection.imageMaxBytes} byte budget`,
+          'INVALID_REQUEST',
+        )
+      }
+      const stored = await attachments.readImage(ref)
+      const base64 = Buffer.from(stored.data).toString('base64')
+      prepared.set(id, `data:${stored.ref.mediaType};base64,${base64}`)
+    }
+    return prepared
+  }
+
   private async * request(
     options: GenerateOptions,
     signal: AbortSignal,
@@ -305,7 +387,8 @@ export class KimiAdapter extends LlmAdapter {
       supportsReasoning: model?.supportsReasoning ?? false,
       sendTemperature: connection.sendTemperature,
     }
-    const body: WireRequest = serializeRequest(options, defaults)
+    const images = await this.prepareImages(options, connection, model)
+    const body: WireRequest = serializeRequest(options, defaults, images)
     const headers = {
       'authorization': `Bearer ${apiKey}`,
       'content-type': 'application/json',

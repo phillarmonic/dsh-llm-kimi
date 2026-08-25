@@ -1,16 +1,26 @@
 /**
  * Serialize harness messages into Kimi chat completions. Kimi speaks the
- * OpenAI chat-completions dialect; this adapter is text-only, so image content
- * is rejected rather than silently dropped. Assistant turns replay their
- * reasoning as `reasoning_content` — Kimi requires it on tool-call turns while
- * thinking is enabled.
+ * OpenAI chat-completions dialect. Image content is emitted as inline
+ * `image_url` base64 data-URL parts, resolved ahead of serialization into the
+ * {@link PreparedImages} map keyed by attachment id. Assistant turns replay
+ * their reasoning as `reasoning_content` — Kimi requires it on tool-call turns
+ * while thinking is enabled.
  *
  * @module @phillarmonic/dsh-llm-kimi/serialize
  */
 
-import { contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
+import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
-import type { WireMessage, WireRequest, WireTool } from './types.ts'
+import type { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import type { WireContentPart, WireMessage, WireRequest, WireTool } from './types.ts'
+
+/**
+ * Inline image data URLs resolved before serialization, keyed by attachment
+ * id. The adapter reads each referenced image through the durable attachment
+ * service and encodes it as a `data:<mediaType>;base64,<bytes>` URL; serialize
+ * only looks the URL up, so it stays synchronous and pure.
+ */
+export type PreparedImages = ReadonlyMap<AttachmentId, string>
 
 /** Adapter-level request defaults derived from plugin config and the selected model. */
 export interface RequestDefaults {
@@ -67,11 +77,49 @@ function flattenText(blocks: readonly ContentBlock[]): string {
     .join('')
 }
 
-/** Reject image content before any text-flattening path can silently erase it. */
-function assertTextOnly(blocks: readonly ContentBlock[]): void {
-  if (contentHasImage(blocks)) {
-    throw new LlmError('The Kimi chat-completions adapter does not support image content.', 'UNSUPPORTED_CONTENT')
+/** Resolve one durable image block into its inline `image_url` part. */
+function imagePart(
+  block: Extract<ContentBlock, { type: 'image' }>,
+  images: PreparedImages,
+): WireContentPart {
+  const url = images.get(block.attachment.attachmentId)
+  if (url === undefined) {
+    throw new LlmError(
+      `Kimi request image ${block.attachment.attachmentId} was not prepared.`,
+      'INVALID_REQUEST',
+    )
   }
+  return { type: 'image_url', image_url: { url } }
+}
+
+/**
+ * Convert a block list into ordered text and image parts. Nested tool-result
+ * blocks are flattened so a tool result that returns an image still reaches the
+ * model; empty text blocks are dropped.
+ */
+function contentParts(blocks: readonly ContentBlock[], images: PreparedImages): WireContentPart[] {
+  const parts: WireContentPart[] = []
+  for (const block of blocks) {
+    switch (block.type) {
+      case 'text':
+        if (block.text.length > 0) parts.push({ type: 'text', text: block.text })
+        break
+      case 'image':
+        parts.push(imagePart(block, images))
+        break
+      case 'tool-result':
+        parts.push(...contentParts(block.content, images))
+        break
+      default:
+        break
+    }
+  }
+  return parts
+}
+
+/** True when any part is an inline image. */
+function hasImagePart(parts: readonly WireContentPart[]): boolean {
+  return parts.some(part => part.type === 'image_url')
 }
 
 /** Serialize one assistant message (text + reasoning + tool calls). */
@@ -107,15 +155,20 @@ function serializeAssistant(message: Message): WireMessage {
 /**
  * Serialize the conversation. `tool-result` blocks become standalone
  * `{role: 'tool'}` messages; the harness puts each tool result in its own
- * user-role message, so a mixed user message contributes its text first and
- * its tool results as separate wire messages after.
+ * user-role message, so a mixed user message contributes its text and images
+ * first and its tool results as separate wire messages after. A user or tool
+ * message carrying image content is emitted as an ordered parts array;
+ * text-only messages keep the compact string form.
  * @param messages - the harness conversation, in order.
+ * @param images - inline image data URLs resolved by attachment id.
  * @returns the wire messages; order preserved, each tool result expanded into its own entry.
  */
-export function serializeMessages(messages: readonly Message[]): WireMessage[] {
+export function serializeMessages(
+  messages: readonly Message[],
+  images: PreparedImages = new Map(),
+): WireMessage[] {
   const wire: WireMessage[] = []
   for (const message of messages) {
-    assertTextOnly(message.content)
     if (message.role === 'system') {
       wire.push({ role: 'system', content: flattenText(message.content) })
       continue
@@ -129,16 +182,26 @@ export function serializeMessages(messages: readonly Message[]): WireMessage[] {
     const toolResults = message.content.filter(
       (block): block is Extract<ContentBlock, { type: 'tool-result' }> => block.type === 'tool-result',
     )
-    const text = flattenText(message.content)
-    if (text.length > 0 || toolResults.length === 0) {
-      wire.push({ role: 'user', content: text })
+    const nonToolBlocks = message.content.filter(block => block.type !== 'tool-result')
+    const parts = contentParts(nonToolBlocks, images)
+    if (hasImagePart(parts)) {
+      wire.push({ role: 'user', content: parts })
+    } else {
+      const text = flattenText(message.content)
+      if (text.length > 0 || toolResults.length === 0) {
+        wire.push({ role: 'user', content: text })
+      }
     }
     for (const result of toolResults) {
+      const resultParts = contentParts(result.content, images)
       wire.push({
         role: 'tool',
         tool_call_id: result.toolCallId,
-        // Empty tool output still needs some content on the wire.
-        content: flattenText(result.content) || '(no output)',
+        // Empty tool output still needs some content on the wire; images ride
+        // as parts, text-only results keep the compact string form.
+        content: hasImagePart(resultParts)
+          ? resultParts
+          : flattenText(result.content) || '(no output)',
       })
     }
   }
@@ -152,17 +215,19 @@ export function serializeMessages(messages: readonly Message[]): WireMessage[] {
  * it, since Kimi enforces fixed sampling.
  * @param options - the harness request (model, history, system, tools, sampling).
  * @param defaults - adapter-level defaults; undefined fields put nothing on the wire.
+ * @param images - inline image data URLs resolved by attachment id.
  * @returns the chat-completions request body.
  */
 export function serializeRequest(
   options: GenerateOptions,
   defaults: RequestDefaults = {},
+  images: PreparedImages = new Map(),
 ): WireRequest {
   const messages: WireMessage[] = []
   if (options.system !== undefined) {
     messages.push({ role: 'system', content: options.system })
   }
-  messages.push(...serializeMessages(options.messages))
+  messages.push(...serializeMessages(options.messages, images))
 
   const tools: WireTool[] | undefined = options.tools?.map(tool => ({
     type: 'function',
