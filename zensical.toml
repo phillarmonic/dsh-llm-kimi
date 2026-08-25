@@ -10,6 +10,13 @@ repo_url = "https://github.com/phillarmonic/dsh-llm-kimi"
 repo_name = "phillarmonic/dsh-llm-kimi"
 edit_uri = "edit/main/docs/"
 
+extra_css = [
+  "assets/components/mermaid-panzoom/styles.css",
+]
+extra_javascript = [
+  { path = "assets/components/mermaid-panzoom/index.js", type = "module" },
+]
+
 nav = [
   { "Overview" = "index.md" },
   { "Installation" = "installation.md" },
