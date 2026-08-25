@@ -120,6 +120,9 @@ web_modules/
 # TypeScript cache
 *.tsbuildinfo
 
+# Build output (tsdown)
+/lib
+
 # Optional npm cache directory
 .npm
 
