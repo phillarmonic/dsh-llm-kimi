@@ -23,21 +23,17 @@ It registers a direct-fetch `LlmAdapter` for the `kimi-code` provider route and 
 
 ## Quick start
 
+Install it as a bundle into a DeepSeek Harness profile:
+
 ```sh
-pnpm add @phillarmonic/dsh-llm-kimi
+dsh plugin --profile <name> add @phillarmonic/dsh-llm-kimi
 ```
 
-Add the plugin to your `cordis.yml` and export your Kimi Code key:
-
-```yaml
-plugins:
-  llm: {}
-  '@phillarmonic/dsh-llm-kimi':
-    reasoningEffort: low
-```
+Export your Kimi Code key and restart the profile:
 
 ```sh
 export KIMI_CODE_API_KEY=sk-...
+dsh --profile <name>
 ```
 
 Then select provider `kimi-code` and a model such as `k3` when you run a task.

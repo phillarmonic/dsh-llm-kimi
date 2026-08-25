@@ -1,0 +1,5 @@
+# Applied when a profile lists this bundle. The plugin id matches the
+# package's exported `name`; every config field stays optional.
+- insert:
+    - id: llm-kimi
+      name: '@phillarmonic/dsh-llm-kimi'

@@ -6,6 +6,15 @@ It registers a direct-fetch `LlmAdapter` for the `kimi-code` provider route, str
 
 ## Install
 
+Install as a DeepSeek Harness bundle so `dsh plugin` registers it automatically:
+
+```sh
+dsh plugin --profile <name> add @phillarmonic/dsh-llm-kimi
+dsh --profile <name>
+```
+
+Or add it manually when you compose `cordis.yml` directly:
+
 ```sh
 pnpm add @phillarmonic/dsh-llm-kimi
 ```

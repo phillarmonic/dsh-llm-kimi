@@ -1,53 +1,47 @@
 ---
 title: Installation
 description: >-
-  Install the @phillarmonic/dsh-llm-kimi connector plugin and its DeepSeek
-  Harness peer dependencies, then register it in cordis.yml and provide a Kimi
-  Code API key.
+  Install the @phillarmonic/dsh-llm-kimi connector plugin into a DeepSeek
+  Harness profile with dsh plugin, then provide a Kimi Code API key.
 icon: lucide/download
 ---
 
 # Installation
 
-## Install the package
+## Install with `dsh plugin`
+
+The package is a DeepSeek Harness **bundle**: its manifest declares `dsh.bundle`, so `dsh plugin` installs it and activates its `cordis.patch.yml` layer automatically. From any directory, add it to a profile:
 
 ```sh
-pnpm add @phillarmonic/dsh-llm-kimi
+dsh plugin --profile <name> add @phillarmonic/dsh-llm-kimi
 ```
 
-## Peer dependencies
-
-The harness packages are peer dependencies. Install them alongside the plugin if they are not already present:
+`dsh plugin` forwards to pnpm in the profile directory, then appends the package to `dsh.profile.bundles`. The bundle set is read at profile start, so restart the profile after installing:
 
 ```sh
-pnpm add @deepseek-ai/cordis @deepseek-ai/dsh-llm @deepseek-ai/dsh-credentials \
-  @deepseek-ai/dsh-settings @deepseek-ai/dsh-launch-environment @deepseek-ai/dsh-timeout \
-  @deepseek-ai/dsh-attachment @deepseek-ai/schemastery
+dsh --profile <name>
 ```
+
+Verify the layer before booting, or remove the bundle later:
+
+```sh
+dsh --profile <name> --dump-config                       # shows a "@phillarmonic/dsh-llm-kimi" layer
+dsh plugin --profile <name> remove @phillarmonic/dsh-llm-kimi
+```
+
+The bundle's patch layer registers the plugin next to the `llm` capability for you, so no `cordis.yml` edit is needed. Every config field is optional and the defaults target the public Kimi Code endpoint; see [Configuration](configuration.md) to tune them.
 
 !!! note "Attachment service is optional at runtime"
 
-    `@deepseek-ai/dsh-attachment` supplies the durable image store. Text-only
-    requests never touch it. A request that carries images fails loudly when the
-    service is not mounted. See [Image input](image-input.md).
+    Image support uses `@deepseek-ai/dsh-attachment`, the durable image store.
+    Text-only requests never touch it. A request that carries images fails
+    loudly when the service is not mounted. See [Image input](image-input.md).
 
 ## Requirements
 
 - Node `^22.19 || >=24`
 - ESM project (`"type": "module"`)
 - A Kimi Code API key from the Kimi console at `api.kimi.com`
-
-## Register the plugin
-
-Add the plugin next to the `llm` capability in your `cordis.yml`. Every field is optional; the defaults target the public Kimi Code endpoint.
-
-```yaml
-plugins:
-  llm: {}
-  '@phillarmonic/dsh-llm-kimi':
-    apiKeyEnv: KIMI_CODE_API_KEY
-    reasoningEffort: low
-```
 
 ## Provide the API key
 
@@ -62,3 +56,7 @@ Or store it through the harness credentials service (the web Models page writes 
 ## Verify
 
 Select provider `kimi-code` with model `k3` and run any task. The adapter streams the response and reports usage before the finish chunk.
+
+## Composing `cordis.yml` directly
+
+Building your own composition instead of using a profile? See [manual installation](development.md#manual-installation) for the raw `pnpm add`, peer-dependency, and `cordis.yml` registration steps.
